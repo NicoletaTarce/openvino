@@ -1617,7 +1617,7 @@ static ov::Tensor sliceLastNAlongAxis(const ov::Tensor& src, size_t axis, size_t
 
 // Slice a tensor to its last N elements along the given axis.
 // Uses row-major (C-contiguous) memory layout assumed by ov::Tensor.
-ov::Tensor sliceLastNAlongAxis(const ov::Tensor& tensor, size_t axis, size_t N) {
+ov::Tensor sliceLastNAlongAxisAndrei(const ov::Tensor& tensor, size_t axis, size_t N) {
     const ov::Shape& shape = tensor.get_shape();
     const size_t ndim = shape.size();
 
@@ -1904,7 +1904,7 @@ bool testNRMSE(const TensorMap& outputs, const TensorMap& references, const Layo
         }
 
         // For npuw_out_tensor_1, count zeros and derive N from the Gaussian sum N*(N+1)/2
-        if (tensorName == "npuw_out_tensor_1" || tensorName == "633" || tensorName == "357" || tensorName == "327" || tensorName == "328" || tensorName == "358" || tensorName == "317" || tensorName == "420" || tensorName == "359" || tensorName == "374" || tensorName == "356" || tensorName == "369" || tensorName == "378" || tensorName == "377" || tensorName == "npuw_out_tensor_3" || tensorName == "425") {
+        if (tensorName == "npuw_out_tensor_1" || tensorName == "633" || tensorName == "357" || tensorName == "327" || tensorName == "328" || tensorName == "358" || tensorName == "317" || tensorName == "420" || tensorName == "359" || tensorName == "374" || tensorName == "356" || tensorName == "369" || tensorName == "378" || tensorName == "377" || tensorName == "npuw_out_tensor_3" || tensorName == "425" || tensorName == "317" || tensorName == "358" || tensorName == "1583" || tensorName == "1584" || tensorName == "627" || tensorName == "npuw_out_tensor_3" || tensorName == "npuw_out_tensor_4" || tensorName == "npuw_out_tensor_0" || tensorName == "npuw_out_tensor_6" || tensorName == "npuw_out_tensor_7" || tensorName == "npuw_out_tensor_2" || tensorName == "npuw_out_tensor_5" || tensorName == "278" || tensorName == "316" || tensorName == "318") {
             auto fp32Tensor = npu::utils::toFP32(output);
             const float* data = fp32Tensor.data<const float>();
             size_t total = fp32Tensor.get_size();
@@ -1933,8 +1933,8 @@ bool testNRMSE(const TensorMap& outputs, const TensorMap& references, const Layo
             // if (doSlice) {
             std::cout << "Slicing output '" << tensorName << "': last " << sliceSize
                         << " elements along axis " << sliceAxis << std::endl;
-            outputTensor   = sliceLastNAlongAxis(outputTensor,   sliceAxis, sliceSize);
-            referenceTensor = sliceLastNAlongAxis(referenceTensor, sliceAxis, sliceSize);
+            outputTensor   = sliceLastNAlongAxisAndrei(outputTensor, sliceAxis, sliceSize);
+            referenceTensor = sliceLastNAlongAxisAndrei(referenceTensor, sliceAxis, sliceSize);
             // }
             if (applySoftMax) {
                 std::vector<float> actOutput;
