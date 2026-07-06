@@ -104,6 +104,12 @@ DEFINE_string(nrmse_prefill_seq_len_size, "",
         "e.g. 'present.0.key:7;present.0.value:7;Result_logits:7'. Used together with "
         "--nrmse_prefill_seq_len_axis. If either flag is missing for a given layer, the full tensor "
         "is compared.");
+DEFINE_string(nrmse_slice_axis, "",
+        "Optional. Per-output axis along which to slice before computing NRMSE (last N elements). "
+        "Format: 'output1:2;output2:1'. Only named outputs are sliced; others are compared in full.");
+DEFINE_string(nrmse_slice_size, "",
+        "Optional. Per-output number of last elements to take along the slice axis for NRMSE. "
+        "Must be paired with --nrmse_slice_axis. Format: 'output1:50;output2:10'.");
 DEFINE_string(l2norm_threshold, std::to_string(metric_defaults::l2norm_threshold),
         "Threshold for 'l2norm' mode. Can be a single value or per-layer: 'layer1:1.0;layer2:2.0'");
 DEFINE_string(overlap_threshold, std::to_string(metric_defaults::overlap_threshold),
@@ -204,6 +210,10 @@ void utils::parseCommandLine(int argc, char* argv[]) {
                 std::cout << "    Prefill seq-len axis: " << FLAGS_nrmse_prefill_seq_len_axis << std::endl;
                 std::cout << "    Prefill seq-len size: " << FLAGS_nrmse_prefill_seq_len_size << std::endl;
             }
+            if (!FLAGS_nrmse_slice_axis.empty())
+                std::cout << "    Slice axis:       " << FLAGS_nrmse_slice_axis << std::endl;
+            if (!FLAGS_nrmse_slice_size.empty())
+                std::cout << "    Slice size:       " << FLAGS_nrmse_slice_size << std::endl;
         } else if (strEq(FLAGS_mode, "l2norm")) {
             std::cout << "    Threshold:        " << FLAGS_l2norm_threshold << std::endl;
         }
@@ -291,4 +301,43 @@ double utils::getValueForLayer(const PerLayerValueMap& valueMap, const std::stri
 
     // Should never be reached for properly initialised maps.
     return 0.0;
+}
+
+/**
+ * @brief Parse a string of per-layer integer values into a map (no wildcard).
+ * @param str Input string in format "layer1:value1;layer2:value2"
+ * @return Map of layer name to integer value (only explicitly named layers)
+ */
+utils::PerLayerIntMap utils::parsePerLayerInts(const std::string& str) {
+    PerLayerIntMap result;
+
+    if (str.empty()) {
+        return result;
+    }
+
+    std::istringstream stream(str);
+    std::string pair;
+
+    while (std::getline(stream, pair, ';')) {
+        size_t colonPos = pair.find(':');
+        if (colonPos != std::string::npos) {
+            std::string layerName = pair.substr(0, colonPos);
+            std::string valueStr = pair.substr(colonPos + 1);
+
+            layerName.erase(0, layerName.find_first_not_of(" \t"));
+            layerName.erase(layerName.find_last_not_of(" \t") + 1);
+            valueStr.erase(0, valueStr.find_first_not_of(" \t"));
+            valueStr.erase(valueStr.find_last_not_of(" \t") + 1);
+
+            try {
+                int64_t value = std::stoll(valueStr);
+                result[layerName] = value;
+            } catch (const std::exception&) {
+                std::cerr << "Warning: Failed to parse integer value '" << valueStr
+                          << "' for layer '" << layerName << "'" << std::endl;
+            }
+        }
+    }
+
+    return result;
 }
