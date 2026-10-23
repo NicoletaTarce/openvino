@@ -19,6 +19,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -1560,11 +1561,8 @@ bool testRRMSE(const TensorMap& outputs, const TensorMap& references, const Layo
 // (using 'nrmse_loss_threshold' flag, with expected value in range [0.0 -> infinity))
 // e.g. '--mode nrmse --nrmse_loss_threshold 0.01'
 // e.g. '--mode nrmse --nrmse_loss_threshold "logits:0.03;pred_boxes:0.05"'
-//
-// Optional per-output prefill slicing for LLM KV cache / hidden state outputs:
-//   --nrmse_prefill_seq_len_axis "<layer>:<axis>;..."
-//   --nrmse_prefill_seq_len_size "<layer>:<N>;..."
-// Keeps only the last N elements along the specified axis before computing NRMSE.
+// Optional per-output prefill slicing before batch splitting, softmax and NRMSE:
+// --nrmse_prefill_seq_len_axis "output1:2;output2:1" --nrmse_prefill_seq_len_size "output1:50;output2:10"
 //
 
 // Return a new contiguous tensor containing the last `len` elements of `src` along `axis`.
@@ -1826,11 +1824,8 @@ bool testNRMSE(const TensorMap& outputs, const TensorMap& references, const Layo
     // Parse per-layer thresholds
     auto thresholdMap = utils::parsePerLayerValues(FLAGS_nrmse_loss_threshold, metric_defaults::nrmse_loss_threshold);
 
-    // Parse optional per-layer prefill seq-len axis/size maps used to slice LLM
-    // KV-cache / hidden-state outputs to the last N positions along the sequence axis.
-    // Only entries that appear in BOTH maps are honored; otherwise the full tensor is compared.
-    auto seqLenAxisMap = utils::parsePerLayerValues(FLAGS_nrmse_prefill_seq_len_axis, 0.0);
-    auto seqLenSizeMap = utils::parsePerLayerValues(FLAGS_nrmse_prefill_seq_len_size, 0.0);
+    const auto sliceAxisMap = utils::parsePerLayerInts(FLAGS_nrmse_prefill_seq_len_axis);
+    const auto sliceSizeMap = utils::parsePerLayerInts(FLAGS_nrmse_prefill_seq_len_size);
 
     bool allPassed = true;
     for (auto& [tensorName, output] : outputs) {
@@ -1840,24 +1835,39 @@ bool testNRMSE(const TensorMap& outputs, const TensorMap& references, const Layo
 
         double layerThreshold = utils::getValueForLayer(thresholdMap, tensorName);
 
-        // Optional prefill slicing: applied only when both axis and size are explicitly
-        // specified for this layer. When only one of the two is given, the full tensor
-        // is compared and a warning is emitted.
+        if (tensorName == "npuw_out_tensor_1" || tensorName == "633" || tensorName == "316" ||
+            tensorName == "318" || tensorName == "381" || tensorName == "1145" || tensorName == "1567" || tensorName == "npuw_out_tensor_3") {
+            const auto fp32Tensor = npu::utils::toFP32(output);
+            const float* data = fp32Tensor.data<const float>();
+            size_t zeroCount = 0;
+            for (size_t i = 0; i < fp32Tensor.get_size(); ++i) {
+                if (data[i] == 0.0f) {
+                    ++zeroCount;
+                }
+            }
+            // Invert zeroCount = N * (N + 1) / 2.
+            const auto gaussN =
+                    static_cast<int64_t>((-1.0 + std::sqrt(1.0 + 8.0 * static_cast<double>(zeroCount))) / 2.0);
+            std::cout << tensorName << ": zero count = " << zeroCount << "  =>  N = " << gaussN << std::endl;
+        }
+
+        const auto axisIt = sliceAxisMap.find(tensorName);
+        const auto sizeIt = sliceSizeMap.find(tensorName);
+        const bool doSlice = axisIt != sliceAxisMap.end() && sizeIt != sliceSizeMap.end();
+        if ((axisIt != sliceAxisMap.end()) != (sizeIt != sliceSizeMap.end())) {
+            std::cout << "Warning: only one of --nrmse_prefill_seq_len_axis / --nrmse_prefill_seq_len_size is set for layer '"
+                      << tensorName << "'; comparing full tensor." << std::endl;
+        }
+        const size_t sliceAxis = doSlice ? static_cast<size_t>(axisIt->second) : 0;
+        const size_t sliceSize = doSlice ? static_cast<size_t>(sizeIt->second) : 0;
+
         ov::Tensor outputForCompare = output;
         ov::Tensor referenceForCompare = referencesIterator->second;
-        const bool hasAxis = seqLenAxisMap.find(tensorName) != seqLenAxisMap.end();
-        const bool hasSize = seqLenSizeMap.find(tensorName) != seqLenSizeMap.end();
-        if (hasAxis && hasSize) {
-            const size_t axis = static_cast<size_t>(seqLenAxisMap.at(tensorName));
-            const size_t keep = static_cast<size_t>(seqLenSizeMap.at(tensorName));
-            std::cout << "Slicing NRMSE input '" << tensorName << "' to last " << keep
-                      << " element(s) along axis " << axis << std::endl;
-            outputForCompare = sliceLastNAlongAxis(outputForCompare, axis, keep);
-            referenceForCompare = sliceLastNAlongAxis(referenceForCompare, axis, keep);
-        } else if (hasAxis != hasSize) {
-            std::cout << "Warning: only one of --nrmse_prefill_seq_len_axis / "
-                         "--nrmse_prefill_seq_len_size is set for layer '"
-                      << tensorName << "'; comparing full tensor." << std::endl;
+        if (doSlice) {
+            std::cout << "Slicing NRMSE input '" << tensorName << "' to last " << sliceSize
+                      << " element(s) along axis " << sliceAxis << std::endl;
+            outputForCompare = sliceLastNAlongAxis(outputForCompare, sliceAxis, sliceSize);
+            referenceForCompare = sliceLastNAlongAxis(referenceForCompare, sliceAxis, sliceSize);
         }
 
         BlobTestMethod blobComparator = [applySoftMax, layerThreshold](ov::Tensor outputTensor, ov::Tensor referenceTensor) {

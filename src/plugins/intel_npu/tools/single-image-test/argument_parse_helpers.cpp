@@ -6,6 +6,7 @@
 #include <openvino/openvino.hpp>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 
 // Non-template globals declared extern in the header
@@ -96,17 +97,11 @@ DEFINE_string(rrmse_loss_threshold, std::to_string(metric_defaults::rrmse_loss_t
 DEFINE_string(nrmse_loss_threshold, std::to_string(metric_defaults::nrmse_loss_threshold),
         "Threshold for 'nrmse' mode. Can be a single value or per-layer: 'logits:0.03;pred_boxes:0.05'");
 DEFINE_string(nrmse_prefill_seq_len_axis, "",
-        "Optional. Per-output sequence-length axis used by the 'nrmse' mode to slice prefill LLM "
-        "outputs (KV cache / hidden state). Semicolon-separated list of 'layer:axis' pairs, e.g. "
-        "'present.0.key:2;present.0.value:3;Result_logits:1'. Combined with --nrmse_prefill_seq_len_size, "
-        "the output tensor is sliced to its last N elements along the specified axis before computing "
-        "NRMSE. If either flag is missing for a given layer, the full tensor is compared.");
+        "Optional. Per-output sequence-length axis for prefill slicing before batch splitting and NRMSE. "
+        "Format: 'output1:2;output2:1'. Only named outputs are sliced; others are compared in full.");
 DEFINE_string(nrmse_prefill_seq_len_size, "",
-        "Optional. Per-output number of elements to keep along the sequence-length axis (= prompt "
-        "length) when computing NRMSE on prefill LLM outputs. Semicolon-separated 'layer:N' pairs, "
-        "e.g. 'present.0.key:7;present.0.value:7;Result_logits:7'. Used together with "
-        "--nrmse_prefill_seq_len_axis. If either flag is missing for a given layer, the full tensor "
-        "is compared.");
+        "Optional. Per-output positive number of last elements to take along the slice axis for NRMSE. "
+        "Must be paired with --nrmse_prefill_seq_len_axis. Format: 'output1:50;output2:10'.");
 DEFINE_string(l2norm_threshold, std::to_string(metric_defaults::l2norm_threshold),
         "Threshold for 'l2norm' mode. Can be a single value or per-layer: 'layer1:1.0;layer2:2.0'");
 DEFINE_string(l2norm_dequant_scale, "",
@@ -213,8 +208,10 @@ void utils::parseCommandLine(int argc, char* argv[]) {
             std::cout << "    mAP Threshold:     " << FLAGS_map_threshold << std::endl;
         } else if (strEq(FLAGS_mode, "nrmse")) {
             std::cout << "    Threshold:        " << FLAGS_nrmse_loss_threshold << std::endl;
-            if (!FLAGS_nrmse_prefill_seq_len_axis.empty() || !FLAGS_nrmse_prefill_seq_len_size.empty()) {
+            if (!FLAGS_nrmse_prefill_seq_len_axis.empty()) {
                 std::cout << "    Prefill seq-len axis: " << FLAGS_nrmse_prefill_seq_len_axis << std::endl;
+            }
+            if (!FLAGS_nrmse_prefill_seq_len_size.empty()) {
                 std::cout << "    Prefill seq-len size: " << FLAGS_nrmse_prefill_seq_len_size << std::endl;
             }
         } else if (strEq(FLAGS_mode, "l2norm")) {
@@ -315,6 +312,38 @@ double utils::getValueForLayer(const PerLayerValueMap& valueMap, const std::stri
 
     // Should never be reached for properly initialised maps.
     return 0.0;
+}
+
+utils::PerLayerIntMap utils::parsePerLayerInts(const std::string& str) {
+    PerLayerIntMap result;
+    std::istringstream stream(str);
+    std::string pair;
+    while (std::getline(stream, pair, ';')) {
+        const auto colonPos = pair.find(':');
+        OPENVINO_ASSERT(colonPos != std::string::npos, "Expected 'layer:integer', got '", pair, "'");
+        std::string layerName = pair.substr(0, colonPos);
+        std::string valueStr = pair.substr(colonPos + 1);
+        layerName.erase(0, layerName.find_first_not_of(" \t"));
+        layerName.erase(layerName.find_last_not_of(" \t") + 1);
+        valueStr.erase(0, valueStr.find_first_not_of(" \t"));
+        valueStr.erase(valueStr.find_last_not_of(" \t") + 1);
+        OPENVINO_ASSERT(!layerName.empty() && layerName != "*",
+                        "Expected an explicit output name in '", pair, "'");
+
+        size_t parsed = 0;
+        int64_t value = 0;
+        try {
+            value = std::stoll(valueStr, &parsed);
+        } catch (const std::invalid_argument&) {
+            OPENVINO_THROW("Invalid integer '", valueStr, "' for layer '", layerName, "'");
+        } catch (const std::out_of_range&) {
+            OPENVINO_THROW("Integer '", valueStr, "' is out of range for layer '", layerName, "'");
+        }
+        OPENVINO_ASSERT(parsed == valueStr.size() && value >= 0,
+                        "Expected a non-negative integer for layer '", layerName, "', got '", valueStr, "'");
+        result[layerName] = value;
+    }
+    return result;
 }
 
 /**

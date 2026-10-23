@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <limits>
 #include <map>
 #include <optional>
@@ -118,8 +119,10 @@ namespace utils {
 void parseCommandLine(int argc, char* argv[]);
 
 using PerLayerValueMap = std::map<std::string, double>;
+using PerLayerIntMap = std::map<std::string, int64_t>;
 
 PerLayerValueMap parsePerLayerValues(const std::string& str, double defaultValue);
+PerLayerIntMap parsePerLayerInts(const std::string& str);
 double getValueForLayer(const PerLayerValueMap& valueMap, const std::string& layerName);
 
 /**
